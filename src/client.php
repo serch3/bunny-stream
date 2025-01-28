@@ -1,145 +1,205 @@
 <?php
 
 declare(strict_types=1);
+
 namespace Bunny\Stream;
+
+use GuzzleHttp\Client as GuzzleClient;
+use GuzzleHttp\Exception\GuzzleException;
 
 class Client
 {
     private string $apiAccessKey;
     private string $streamLibraryId;
     private string $apiBaseUrl;
-    private \GuzzleHttp\Client $httpClient;
+    private GuzzleClient $httpClient;
 
-    public function __construct(string $apiKey, string $streamLibraryId) {
+    public function __construct(string $apiKey, string $streamLibraryId)
+    {
         $this->apiAccessKey = $apiKey;
         $this->streamLibraryId = $streamLibraryId;
         $this->apiBaseUrl = 'https://video.bunnycdn.com/library/';
 
-        $this->httpClient = new \GuzzleHttp\Client([
+        $this->httpClient = new GuzzleClient([
             'allow_redirects' => false,
-            'http_errors' => false,
-            'base_uri' => $this->apiBaseUrl . $this->streamLibraryId . '/',
-            'headers' => [
+            'http_errors'     => false,
+            'base_uri'        => $this->apiBaseUrl . $this->streamLibraryId . '/',
+            'headers'         => [
                 'AccessKey' => $this->apiAccessKey,
             ],
         ]);
     }
 
-    public function listVideos(string $search = null, int $page = 1, int $items = 100, string $collection = null, string $orderby = null): mixed
-    {
+    /**
+     * Central method for handling API requests and responses.
+     
+     *
+     * @param $method
+     * @param $uri
+     * @param $options     Guzzle request options (query, json, body, etc.)
+     * @param $failureMsg  Default message f
+     * @param $notFoundRef Reference to the resource that was not found
+     * @return mixed
+     *
+     * @throws AuthenticationException
+     * @throws VideoNotFoundException|CollectionNotFoundException
+     * @throws \Exception  On other non-2xx status codes
+     */
+    private function requestJson(
+        string $method,
+        string $uri,
+        array $options = [],
+        string $failureMsg = 'Request failed.',
+        string $notFoundRef = null
+    ) {
+        try {
+            $response = $this->httpClient->request($method, $uri, $options);
+        } catch (GuzzleException $e) {
+            // Network or other transport issues
+            throw new \Exception("Guzzle request error: " . $e->getMessage(), $e->getCode(), $e);
+        }
+
+        $code = $response->getStatusCode();
+        $body       = (string) $response->getBody();
+        $data       = json_decode($body, true);
+
+        // Handle successful responses
+        if ($code >= 200 && $code < 300) {
+            return $data;
+        }
+
+        // Common error handling
+        if ($code === 401) {
+            throw new AuthenticationException($this->apiAccessKey);
+        }
+
+        if ($code === 404) {
+            // Use whichever NotFoundException is relevant to your request
+            if ($notFoundRef && preg_match('/collections/', $uri)) {
+                throw new CollectionNotFoundException($notFoundRef);
+            }
+            if ($notFoundRef) {
+                throw new VideoNotFoundException($notFoundRef);
+            }
+            // Otherwise a generic not found
+            throw new \Exception('Resource not found.');
+        }
+        if ($code === 400) {
+            // Attempt to provide more detail if present in JSON
+            $errorMessage = $data['message'] ?? 'Bad Request';
+            if (!empty($data['data']['errorList']) && is_array($data['data']['errorList'])) {
+                // Append all errorList messages
+                $errorDetails = implode(', ', $data['data']['errorList']);
+                $errorMessage .= ' - ' . $errorDetails;
+            }
+            throw new \Exception($errorMessage, 400);
+        }
+
+        // Fallback for unhandled statuses:
+        throw new \Exception(
+            sprintf('%s (HTTP %d). Response: %s', $failureMsg, $code, $body),
+            $code
+        );
+    }
+
+    public function listVideos(
+        string $search = null,
+        int $page = 1,
+        int $items = 100,
+        string $collection = null,
+        string $orderby = null
+    ): array {
         $query = [
-            'page' => $page,
+            'page'         => $page,
             'itemsPerPage' => $items,
         ];
 
         if ($search) {
             $query['search'] = $search;
         }
-
         if ($collection) {
             $query['collection'] = $collection;
         }
-
         if ($orderby) {
             $query['orderBy'] = $orderby;
         }
 
-        $response = $this->httpClient->request('GET', 'videos', [
-            'query' => $query,
-        ]);
-
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
-        }
-
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
-        }
-
-        throw new Exception('Could not list videos.');
+        return $this->requestJson(
+            'GET',
+            'videos',
+            ['query' => $query],
+            'Could not list videos.'
+        );
     }
 
-    public function getVideo(string $videoId): mixed
+    public function getVideo(string $videoId): array
     {
-        $response = $this->httpClient->request('GET', 'videos/' . $videoId);
-
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
-        }
-
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
-        }
-
-        throw new Exception('Could not get video.');
+        return $this->requestJson(
+            'GET',
+            'videos/' . $videoId,
+            [],
+            'Could not get video.',
+            $videoId
+        );
     }
 
-    public function updateVideo(string $videoId, array $body): mixed
+    public function updateVideo(string $videoId, array $body): array
     {
-        $response = $this->httpClient->request('POST', 'videos/' . $videoId, [
-            'json' => $body,
-        ]);
-
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
-        }
-
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
-        }
-
-        throw new Exception('Could not update video.');
+        return $this->requestJson(
+            'POST',
+            'videos/' . $videoId,
+            ['json' => $body],
+            'Could not update video.',
+            $videoId
+        );
     }
 
-    public function deleteVideo(string $videoId): mixed
+    public function deleteVideo(string $videoId): array
     {
-        $response = $this->httpClient->request('DELETE', 'videos/' . $videoId);
-
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
-        }
-
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
-        }
-
-        if (404 === $response->getStatusCode()) {
-            throw new VideoNotFoundException($videoId);
-        }
-
-        throw new Exception('Could not delete video.');
+        return $this->requestJson(
+            'DELETE',
+            'videos/' . $videoId,
+            [],
+            'Could not delete video.',
+            $videoId
+        );
     }
 
-    public function createVideo($title, string $collectionId = null, int $thumbnailTime = null): mixed
-    {
-        $response = $this->httpClient->request('POST', 'videos', [
-            'json' => [
-                'title' => $title,
-                'collectionId' => $collectionId,
-                'thumbnailTime' => $thumbnailTime,
-            ],
-        ]);
-
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
+    public function createVideo(
+        string $title,
+        string $collectionId = null,
+        int $thumbnailTime = null
+    ): array {
+        $json = [
+            'title' => $title,
+        ];
+        if ($collectionId) {
+            $json['collectionId'] = $collectionId;
+        }
+        if ($thumbnailTime) {
+            $json['thumbnailTime'] = $thumbnailTime;
         }
 
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
-        }
-
-        throw new Exception('Could not create video.');
+        return $this->requestJson(
+            'POST',
+            'videos',
+            ['json' => $json],
+            'Could not create video.'
+        );
     }
 
-    public function uploadVideoWithVideoId(string $videoId, string $path, string $enabledResolutions = null): mixed
-    {
+    public function uploadVideoWithVideoId(
+        string $videoId,
+        string $path,
+        string $enabledResolutions = null
+    ): array {
         if (!file_exists($path)) {
-            throw new Exception("File does not exist at given location.");
+            throw new \Exception("File does not exist at given location: $path");
         }
 
         $fileStream = fopen($path, 'r');
-        if (false === $fileStream) {
-            throw new Exception('The local file could not be opened.');
+        if ($fileStream === false) {
+            throw new \Exception('The local file could not be opened.');
         }
 
         $query = [];
@@ -147,176 +207,123 @@ class Client
             $query['enabledResolutions'] = $enabledResolutions;
         }
 
-        $response = $this->httpClient->request('PUT', 'videos/' . $videoId, [
-            'query' => $query,
-            'body' => $fileStream,
-        ]);
-
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
-        }
-
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
-        }
-
-        if (404 === $response->getStatusCode()) {
-            throw new VideoNotFoundException($videoId);
-        }
-
-        if (400 === $response->getStatusCode()) {
-            throw new Exception('The requested video was already uploaded');
-        }
-
-        throw new Exception('Could not upload video.');
+        return $this->requestJson(
+            'PUT',
+            'videos/' . $videoId,
+            [
+                'query' => $query,
+                'body'  => $fileStream,
+            ],
+            'Could not upload video.',
+            $videoId
+        );
     }
 
-    public function uploadVideo(string $title, string $path, string $collectionId = null, int $thumbnailTime = null, string $enabledResolutions = null): mixed
-    {
+    public function uploadVideo(
+        string $title,
+        string $path,
+        string $collectionId = null,
+        int $thumbnailTime = null,
+        string $enabledResolutions = null
+    ): array {
         $videoObject = $this->createVideo($title, $collectionId, $thumbnailTime);
         return $this->uploadVideoWithVideoId($videoObject['guid'], $path, $enabledResolutions);
     }
 
-    public function setVideoThumbnail(string $videoId, string $url): mixed
+    public function setVideoThumbnail(string $videoId, string $url): array
     {
-
-        $response = $this->httpClient->request('POST', 'videos/' . $videoId . '/thumbnail', [
-            'query' => ['thumbnailUrl' => $url],
-        ]);
-
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
-        }
-
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
-        }
-
-        if (404 === $response->getStatusCode()) {
-            throw new VideoNotFoundException($videoId);
-        }
-
-        throw new Exception('Could not set video thumbnail.');
+        return $this->requestJson(
+            'POST',
+            'videos/' . $videoId . '/thumbnail',
+            [
+                'query' => ['thumbnailUrl' => $url],
+            ],
+            'Could not set video thumbnail.',
+            $videoId
+        );
     }
 
-    public function getVideoHeatmap(string $videoId): mixed
+    public function getVideoHeatmap(string $videoId): array
     {
-        $response = $this->httpClient->request('GET', 'videos/' . $videoId . '/heatmap');
-
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
-        }
-
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
-        }
-
-        if (404 === $response->getStatusCode()) {
-            throw new VideoNotFoundException($videoId);
-        }
-
-        throw new Exception('Could not get video heatmap.');
-        
+        return $this->requestJson(
+            'GET',
+            'videos/' . $videoId . '/heatmap',
+            [],
+            'Could not get video heatmap.',
+            $videoId
+        );
     }
 
-    public function getVideoPlayData(string $videoId, string $token = null, int $expires = null): mixed
-    {
+    public function getVideoPlayData(
+        string $videoId,
+        string $token = null,
+        int $expires = null
+    ): array {
         $query = [];
         if ($token) {
             $query['token'] = $token;
         }
-
         if ($expires) {
             $query['expires'] = $expires;
         }
 
-
-        $response = $this->httpClient->request('GET', 'videos/' . $videoId . '/play', [
-            'query' => $query,
-        ]);
-
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
-        }
-
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
-        }
-
-        if (404 === $response->getStatusCode()) {
-            throw new VideoNotFoundException($videoId);
-        }
-
-        throw new Exception('Could not get video statistics.');
+        return $this->requestJson(
+            'GET',
+            'videos/' . $videoId . '/play',
+            ['query' => $query],
+            'Could not get video play data.',
+            $videoId
+        );
     }
 
-    public function getVideoStatistics(string $videoId, array $query): mixed
+    public function getVideoStatistics(string $videoId = null, array $query = null): array
     {
-        $response = $this->httpClient->request('GET', 'statistics', [
-            'query' => $query,
-        ]);
-
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
+        if (!$query) {
+            $query = [];
         }
 
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
+        if ($videoId) {
+            $query = ['videoId' => $videoId];
         }
 
-        if (404 === $response->getStatusCode()) {
-            throw new VideoNotFoundException($videoId);
-        }
-
-        throw new Exception('Could not get video statistics.');
+        return $this->requestJson(
+            'GET',
+            'statistics',
+            ['query' => $query]
+        );
     }
 
-    public function reencodeVideo(string $videoId): mixed
+    public function reencodeVideo(string $videoId): array
     {
-        $response = $this->httpClient->request('POST', 'videos/' . $videoId . '/reencode');
-
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
-        }
-
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
-        }
-
-        if (404 === $response->getStatusCode()) {
-            throw new VideoNotFoundException($videoId);
-        }
-
-        throw new Exception('Could not reencode video.');
+        return $this->requestJson(
+            'POST',
+            'videos/' . $videoId . '/reencode',
+            [],
+            'Could not reencode video.',
+            $videoId
+        );
     }
 
-    public function repackageVideo(string $videoId, bool $keepOriginalFiles = True): mixed
+    public function repackageVideo(string $videoId, bool $keepOriginalFiles = true): array
     {
-        $response = $this->httpClient->request('GET', 'videos/' . $videoId . '/repackage', [
-            'query' => ['keepOriginalFiles' => $keepOriginalFiles],
-        ]);
+        $query = ['keepOriginalFiles' => $keepOriginalFiles ? 'true' : 'false'];
 
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
-        }
-
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
-        }
-
-        if (400 === $response->getStatusCode()) {
-            throw new Exception('Enterprise DRM is disabled for the library, repackaging not available');
-        }
-
-        if (404 === $response->getStatusCode()) {
-            throw new VideoNotFoundException($videoId);
-        }
-
-        throw new Exception('Could not repackage video.');
+        return $this->requestJson(
+            'GET',
+            'videos/' . $videoId . '/repackage',
+            ['query' => $query],
+            'Could not repackage video.',
+            $videoId
+        );
     }
 
-    public function fetchVideo(string $url, string $title = null, string $collectionId = null, int $thumbnailTime = null, array $headers = null): mixed
-    {
+    public function fetchVideo(
+        string $url,
+        string $title = null,
+        string $collectionId = null,
+        int $thumbnailTime = null,
+        array $headers = null
+    ): array {
         $query = [];
         if ($collectionId) {
             $query['collectionId'] = $collectionId;
@@ -324,7 +331,7 @@ class Client
         if ($thumbnailTime) {
             $query['thumbnailTime'] = $thumbnailTime;
         }
-        
+
         $body = [
             'url' => $url,
         ];
@@ -334,222 +341,142 @@ class Client
         if ($headers) {
             $body['headers'] = $headers;
         }
-        
-        $response = $this->httpClient->request('POST', 'videos/fetch', [
-            'query' => $query,
-            'json' => $body,
-        ]);
 
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
-        }
-
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
-        }
-
-        if (400 === $response->getStatusCode()) {
-            throw new Exception('Failed fetching the video');
-        }
-
-        if (404 === $response->getStatusCode()) {
-            throw new VideoNotFoundException($url);
-        }
-
-        throw new Exception('Could not fetch video.');
+        return $this->requestJson(
+            'POST',
+            'videos/fetch',
+            [
+                'query' => $query,
+                'json'  => $body,
+            ],
+            'Could not fetch video.'
+        );
     }
 
-    public function addCaption(string $videoId, string $srclang, string $path, $label = null): mixed
-    {
+    public function addCaption(
+        string $videoId,
+        string $srclang,
+        string $path,
+        string $label
+    ): array {
+        if (!file_exists($path)) {
+            throw new \Exception("Captions file does not exist at path: $path");
+        }
+
         $body = [
-            'srclang' => $srclang,
+            'srclang'      => $srclang,
             'captionsFile' => base64_encode(file_get_contents($path)),
         ];
         if ($label) {
             $body['label'] = $label;
         }
 
-        $response = $this->httpClient->request('POST', 'videos/' . $videoId . '/captions/' . $srclang, [
-            'json' => $body,
-        ]);
-
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
-        }
-
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
-        }
-
-        if (400 === $response->getStatusCode()) {
-            throw new Exception('Failed uploading the captions');
-        }
-
-        if (404 === $response->getStatusCode()) {
-            throw new VideoNotFoundException($videoId);
-        }
-
-        throw new Exception('Could not add caption.');
+        return $this->requestJson(
+            'POST',
+            'videos/' . $videoId . '/captions/' . $srclang,
+            ['json' => $body],
+            'Could not add caption.',
+            $videoId
+        );
     }
 
-    public function deleteCaption(string $videoId, string $srclang): mixed
+    public function deleteCaption(string $videoId, string $srclang): array
     {
-        $response = $this->httpClient->request('DELETE', 'videos/' . $videoId . '/captions/' . $srclang);
-
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
-        }
-
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
-        }
-
-        if (400 === $response->getStatusCode()) {
-            throw new Exception('Failed deleting the caption');
-        }
-
-        if (404 === $response->getStatusCode()) {
-            throw new VideoNotFoundException($videoId);
-        }
-
-        throw new Exception('Could not delete caption.');
+        return $this->requestJson(
+            'DELETE',
+            'videos/' . $videoId . '/captions/' . $srclang,
+            [],
+            'Could not delete caption.',
+            $videoId
+        );
     }
 
-    public function transcribeVideo(string $videoId, string $language, bool $force = False): mixed
-    {
-        $response = $this->httpClient->request('POST', 'videos/' . $videoId . '/transcribe', [
-            'query' => ['language' => $language, 'force' => $force ? 'true' : 'false'],
-        ]);
-
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
-        }
-
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
-        }
-
-        if (400 === $response->getStatusCode()) {
-            throw new Exception('Invalid request for transcription queue');
-        }
-
-        if (404 === $response->getStatusCode()) {
-            throw new VideoNotFoundException($videoId);
-        }
-
-        throw new Exception('Could not transcribe video.');
-    }
-
-
-    public function listCollections(string $search = null, int $page = 1, int $items = 100, string $orderby = 'date', bool $includeThumbnails = false): mixed
+    public function transcribeVideo(string $videoId, string $language, bool $force = false): array
     {
         $query = [
-            'page' => $page,
-            'itemsPerPage' => $items,
+            'language' => $language,
+            'force'    => $force ? 'true' : 'false',
+        ];
+
+        return $this->requestJson(
+            'POST',
+            'videos/' . $videoId . '/transcribe',
+            ['query' => $query],
+            'Could not transcribe video.',
+            $videoId
+        );
+    }
+
+    public function listCollections(
+        string $search = null,
+        int $page = 1,
+        int $items = 100,
+        string $orderby = 'date',
+        bool $includeThumbnails = false
+    ): array {
+        $query = [
+            'page'              => $page,
+            'itemsPerPage'      => $items,
             'includeThumbnails' => $includeThumbnails ? 'true' : 'false',
-            'orderBy' => $orderby,
+            'orderBy'           => $orderby,
         ];
 
         if ($search) {
             $query['search'] = $search;
         }
-        
 
-        $response = $this->httpClient->request('GET', 'collections', [
-            'query' => $query,
-        ]);
-
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
-        }
-
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
-        }
-
-        throw new Exception('Could not list collections.'); 
+        return $this->requestJson(
+            'GET',
+            'collections',
+            ['query' => $query],
+            'Could not list collections.'
+        );
     }
 
-    public function getCollection(string $collectionId, bool $includeThumbnails = False): mixed
+    public function getCollection(string $collectionId, bool $includeThumbnails = false): array
     {
-        $response = $this->httpClient->request('GET', 'collections/' . $collectionId, [
-            'query' => ['includeThumbnails' => $includeThumbnails ? 'true' : 'false'],
-        ]);
+        $query = [
+            'includeThumbnails' => $includeThumbnails ? 'true' : 'false',
+        ];
 
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
-        }
-
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
-        }
-
-        if (404 === $response->getStatusCode()) {
-            throw new CollectionNotFoundException($collectionId);
-        }
-
-        throw new Exception('Could not get collection.');
+        return $this->requestJson(
+            'GET',
+            'collections/' . $collectionId,
+            ['query' => $query],
+            'Could not get collection.',
+            $collectionId
+        );
     }
 
-    public function createCollection(string $name): mixed
+    public function createCollection(string $name): array
     {
-        $response = $this->httpClient->request('POST', 'collections', [
-            'json' => [
-                'name' => $name,
-            ],
-        ]);
-
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
-        }
-
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
-        }
-
-        throw new Exception('Could not create collection.');
+        return $this->requestJson(
+            'POST',
+            'collections',
+            ['json' => ['name' => $name]],
+            'Could not create collection.'
+        );
     }
 
-    public function updateCollection(string $collectionId, string $name): mixed
+    public function updateCollection(string $collectionId, string $name): array
     {
-        $response = $this->httpClient->request('POST', 'collections/' . $collectionId, [
-            'json' => [
-                'name' => $name,
-            ],
-        ]);
-
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
-        }
-
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
-        }
-
-        if (404 === $response->getStatusCode()) {
-            throw new CollectionNotFoundException($collectionId);
-        }
-        
-        throw new Exception('Could not update collection.');
+        return $this->requestJson(
+            'POST',
+            'collections/' . $collectionId,
+            ['json' => ['name' => $name]],
+            'Could not update collection.',
+            $collectionId
+        );
     }
 
-    public function deleteCollection(string $collectionId): mixed
+    public function deleteCollection(string $collectionId): array
     {
-        $response = $this->httpClient->request('DELETE', 'collections/' . $collectionId);
-
-        if (401 === $response->getStatusCode()) {
-            throw new AuthenticationException($this->apiAccessKey);
-        }
-
-        if (200 === $response->getStatusCode()) {
-            return json_decode($response->getBody()->getContents(), true);
-        }
-
-        if (404 === $response->getStatusCode()) {
-            throw new CollectionNotFoundException($collectionId);
-        }
-
-        throw new Exception('Could not delete collection.');
+        return $this->requestJson(
+            'DELETE',
+            'collections/' . $collectionId,
+            [],
+            'Could not delete collection.',
+            $collectionId
+        );
     }
-
 }

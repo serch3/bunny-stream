@@ -196,6 +196,20 @@ $client->reencodeVideo($videoId);
 
 ---
 
+### Add output codec to video (Requires Premium Encoding Plan)
+```php
+$client->addOutputCodec($videoId, $codec);
+```
+`$videoId` Id of the video `string`
+
+`$codec` Output codec to be added `int`
+    - 0 = x264
+    - 1 = vp9
+    - 2 = hevc
+    - 3 = av1
+
+---
+
 ### Repackage Video
 ```php
 $client->repackageVideo($videoId, $keepOriginalFiles);
@@ -261,6 +275,40 @@ $client->transcribeVideo($videoId, $language, $force);
 `$force` Default is false `bool`
 
 ---
+
+### Request Video resolutions info
+```php
+$client->requestVideoResolutionsInfo($videoId);
+```
+`$videoId` Id of the video `string`
+
+---
+
+### Cleanup unconfigured resolutions
+```php
+$config = [
+    'deleteNonConfiguredResolutions' => true,
+    'deleteOriginal' => false,
+    'deleteMp4Files' => true,
+    'dryRun' => false,
+];
+$resolutions = "240p,360p,480p";
+
+$client->cleanupResolutions($videoId, $resolutions, $query);
+```
+`$videoId` Id of the video `string`
+
+`$resolutions` List of resolutions to be removed `array`
+
+Optional: 
+
+- `$query` parameters `array`: 
+    - *resolutionsToDelete* - List of resolutions to be removed `array`
+    - *deleteNonConfiguredResolutions* - If set to true, all resolutions that are not configured in the video will be removed   `boolean`
+    - *deleteOriginal* - If set to true, the original file will be removed. `boolean`
+    - *deleteMp4Files* - If set to true, all mp4 files will be removed. `boolean`
+    - *dryRun* - If set to true, no actual file manipulation will happen, only informational data will be returned. `boolean`
+
 
 ## Collections:
 

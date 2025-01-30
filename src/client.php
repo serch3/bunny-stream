@@ -304,6 +304,20 @@ class Client
         );
     }
 
+    public function addOutputCodec(string $videoId, int $codecId): array
+    {
+        if (!in_array($codecId, [0, 1, 2, 3])) {
+            throw new \Exception('Invalid codec value. 0 = x264, 1 = vp9, 2 = hevc, 3 = av1.');
+        }
+
+        return $this->requestJson(
+            'PUT',
+            'videos/' . $videoId . '/outputs/' . $codecId,
+            [],
+            'Could not add output codec.',
+        );
+    }
+
     public function repackageVideo(string $videoId, bool $keepOriginalFiles = true): array
     {
         $query = ['keepOriginalFiles' => $keepOriginalFiles ? 'true' : 'false'];
@@ -403,6 +417,37 @@ class Client
             'videos/' . $videoId . '/transcribe',
             ['query' => $query],
             'Could not transcribe video.',
+            $videoId
+        );
+    }
+
+    public function requestVideoResolutionsInfo(string $videoId): array
+    {
+        return $this->requestJson(
+            'GET',
+            'videos/' . $videoId . '/resolutions',
+            [],
+            'Could not list video resolutions.',
+            $videoId
+        );
+    }
+
+
+    public function cleanupResolutions(string $videoId, string $resolutions, array $query = null): array
+    {
+        $query = [
+            'resolutionsToDelete'       => $resolutions,
+            'deleteNonConfiguredResolutions' => $query['deleteNonConfiguredResolutions'] ?? 'false',
+            'deleteOriginal'            => $query['deleteOriginal'] ?? 'false',
+            'deleteMp4Files'            => $query['deleteMp4Files'] ?? 'false',
+            'dryRun'                    => $query['dryRun'] ?? 'false',
+        ];
+
+        return $this->requestJson(
+            'POST',
+            'videos/' . $videoId . '/resolutions/cleanup',
+            ['query' => $query],
+            'Could not cleanup video resolutions.',
             $videoId
         );
     }

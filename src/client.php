@@ -405,17 +405,30 @@ class Client
         );
     }
 
-    public function transcribeVideo(string $videoId, string $language, bool $force = false): array
+    public function transcribeVideo(string $videoId, string $language, bool $force = false, array $options = []): array
     {
         $query = [
             'language' => $language,
             'force'    => $force ? 'true' : 'false',
         ];
 
+        $opts = [];
+        if (!empty($options)) {
+            $opts = array_filter([
+                'targetLanguages'     => $options['targetLanguages'] ?? null,
+                'generateTitles'      => $options['generateTitles'] ?? null,
+                'generateDescription' => $options['generateDescription'] ?? null,
+                'sourceLanguage'     => $options['sourceLanguage'] ?? null,
+            ], fn($value) => $value !== null);
+        }
+
         return $this->requestJson(
             'POST',
             'videos/' . $videoId . '/transcribe',
-            ['query' => $query],
+            [
+                'query' => $query, 
+                'json'  => $opts,
+            ],
             'Could not transcribe video.',
             $videoId
         );
